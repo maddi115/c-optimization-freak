@@ -1,0 +1,39 @@
+# engine.def - messages the ENGINE sends and understands (the same for every app).
+# Each app has its own protocol.def for its own messages.
+#
+# Binary messages (all little-endian):
+#   SNAPSHOT [u8 2][u8 flags][u16 0][u32 tick][u32 raw bytes] state bytes        (deflate-raw if FLAG_ZIP)
+#   TICK     [u8 3][u8 flags][u16 n][u32 tick] ([u32 checksum] if FLAG_CHECKSUM) n x [i16 kind,a,b,c]
+#   ROWS     [u8 4][u8 flags][u16 row size][u32 tick] then
+#              FLAG_FULL: [u32 first][u32 count][u32 raw bytes] row bytes      (deflate-raw if FLAG_ZIP)
+#              otherwise: [u32 count] count x ([u32 row][row bytes])
+#   CHUNKS   [u8 5][u8 0][u16 n][u32 tick] n x u32 chunk hashes (answer to "fix")
+#   PATCH    [u8 6][u8 flags][u16 n][u32 tick][u32 raw bytes] n x u16 chunk, then chunk bytes (deflate-raw if FLAG_ZIP)
+
+const PORT 8080
+const TICK_MS 50
+const CHUNK_BYTES 1024
+const MSG_SNAPSHOT 2
+const MSG_TICK 3
+const MSG_ROWS 4
+const MSG_CHUNKS 5
+const MSG_PATCH 6
+const SNAPSHOT_HEADER 12
+const TICK_HEADER 8
+const ROWS_HEADER 8
+const PATCH_HEADER 12
+const EVENT_BYTES 8
+const FLAG_CHECKSUM 1
+const FLAG_ZIP 2
+const FLAG_FULL 4
+
+# Browser -> engine
+cmd join join zip:int
+cmd sync sync
+cmd sub sub first:int count:int
+cmd fix fix tick:int
+cmd patch patch first:int mask:int
+
+# Engine -> browser
+msg engine lockstepBytes:int rows:int rowSize:int tickMs:int
+msg stats simUs:f1 bytesPerTick:f1 snapshotBytes:int online:int resyncs:int heals:int

@@ -1,0 +1,28 @@
+# Run one app with Linux's own service manager (no Docker needed).
+# Replace "ride" with your app's name everywhere below.
+#   On the server:
+#     sudo useradd --system --create-home --home-dir /var/lib/ride ride
+#     sudo cp ride /usr/local/bin/ride                       (from build/ride/ride, made by make release)
+#     sudo cp freak-kit.service /etc/systemd/system/ride.service
+#     sudo systemctl daemon-reload && sudo systemctl enable --now ride
+#   Check:  systemctl status ride       Logs:  journalctl -u ride -f
+# Put Caddy in front for HTTPS (see Caddyfile).
+[Unit]
+Description=freak-kit app (one static C file)
+After=network.target
+
+[Service]
+User=ride
+WorkingDirectory=/var/lib/ride
+ExecStart=/usr/local/bin/ride
+Restart=always
+RestartSec=1
+# The app also sandboxes itself (seccomp + Landlock); these are a second layer.
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/ride
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

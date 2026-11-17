@@ -1,0 +1,12 @@
+# HTTPS in front of the engine. Caddy gets and renews the certificate by itself, and passes
+# WebSockets through, so the page's tunnel becomes wss:// automatically.
+#
+# On your server: point your domain's DNS at it, put your domain below, then:
+#   sudo apt install caddy
+#   sudo cp Caddyfile /etc/caddy/Caddyfile && sudo systemctl reload caddy
+#
+# Try it on your own PC first (self-signed certificate, the browser will warn once):
+#   caddy reverse-proxy --from localhost:8443 --to localhost:8080
+example.com {
+    reverse_proxy localhost:8080
+}

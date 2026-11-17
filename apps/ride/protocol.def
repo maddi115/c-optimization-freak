@@ -1,0 +1,16 @@
+# protocol.def - the ride app's own messages. (Engine messages live in engine/engine.def.)
+# make turns this into gen/protocol.h (C, prefix APP_ / app_) and ui/src/protocol.ts.
+
+const NO_RIDE -1
+const EV_TARGET 1
+const EV_RIDE 2
+
+# Browser -> app (plain text, comma separated)
+cmd quote q px:int py:int dx:int dy:int
+cmd book book
+cmd cancel cancel
+
+# App -> browser (JSON)
+msg hello cars:int city:int road:int
+msg ride state:enum(none|quoted|arriving|on_trip|done) px:int py:int dx:int dy:int near:int3 nearEta:int surge:f1 price:f2 km:f2 tripMin:f1 car:int eta:int
+msg city free:int cars:int

@@ -1,0 +1,12 @@
+# protocol.def - the pixels app's own messages. (Engine messages live in engine/engine.def.)
+
+const W 64
+const H 64
+const COLORS 8
+
+# Browser -> app
+cmd paint p cell:int color:int
+
+# App -> browser (JSON)
+msg hello w:int h:int colors:int
+msg board painted:int online:int
