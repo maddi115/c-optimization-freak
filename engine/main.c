@@ -104,7 +104,9 @@ static long why_full[6];   // join, asked (sync), fell behind, fix too old, patc
 static int loaded_snapshot;
 static FILE *rec;
 static uint32_t k_sum;                         // app checksum at this tick (for replay)
-static uint8_t *after_step;                    // chaos only: the mirrored bytes right after the step
+static uint8_t *after_step;   // the mirrored bytes right after the last step. Full copies and patches
+                              // are sent from THIS, not from the live state: actions done since that
+                              // step travel in the next tick message, so a browser must not get them twice.
 static int have_k;
 
 static double now_us(void) {
@@ -139,7 +141,7 @@ static size_t pack(int i, size_t hdr, const uint8_t *raw, size_t n, uint8_t *fla
 // ------------------------------------------------------------------ lockstep messages
 static void send_snapshot(int i) {
     uint8_t flags = 0;
-    size_t len = pack(i, ENG_SNAPSHOT_HEADER, (const uint8_t *)S, (size_t)LB, &flags);
+    size_t len = pack(i, ENG_SNAPSHOT_HEADER, after_step, (size_t)LB, &flags);
     msgbuf[0] = ENG_MSG_SNAPSHOT; msgbuf[1] = flags; put16(msgbuf + 2, 0);
     put32(msgbuf + 4, (uint32_t)ticks); put32(msgbuf + 8, (uint32_t)LB);
     out_bin(i, msgbuf, len);
@@ -186,7 +188,7 @@ static void send_patch(int i, int first, int mask) {
     size_t raw = 0;
     for (int k = 0; k < n; k++) {
         int off = idx[k] * FK_CHUNK, len = LB - off < FK_CHUNK ? LB - off : FK_CHUNK;
-        memcpy(rawbuf + raw, (uint8_t *)S + off, (size_t)len);
+        memcpy(rawbuf + raw, after_step + off, (size_t)len);
         raw += (size_t)len;
     }
     uint8_t flags = 0;
@@ -253,9 +255,27 @@ static void send_rows_delta(int i) {
 }
 
 // ------------------------------------------------------------------ events (live, replay, chaos)
+// Read one recording line: "T tick id text...". The text is the rest of the line, spaces included.
+static int rec_parse(const char *line, char *type, long *t, long *v, char *text, size_t cap) {
+    int off = 0;
+    *v = 0; text[0] = 0;
+    int got = sscanf(line, "%c %ld %ld%n", type, t, v, &off);
+    if (got < 2) return 0;
+    if (got == 3 && line[off] == ' ') {
+        size_t n = strcspn(line + off + 1, "\r\n");
+        if (n >= cap) n = cap - 1;
+        memcpy(text, line + off + 1, n);
+        text[n] = 0;
+    }
+    return 1;
+}
 static void record(char type, int id, const char *text) {
     if (!rec) return;
-    if (text) fprintf(rec, "%c %ld %d %s\n", type, ticks, id, text);
+    if (text) {
+        fprintf(rec, "%c %ld %d ", type, ticks, id);
+        for (const unsigned char *p = (const unsigned char *)text; *p; p++) if (*p >= 32) fputc(*p, rec);
+        fputc('\n', rec);
+    }
     else fprintf(rec, "%c %ld %d\n", type, ticks, id);
     rec_events++;
 }
@@ -332,7 +352,7 @@ static void sim_tick(void) {
         CHECK(npre >= 0 && npre <= JMAX, "take_events returned a bad count");
     }
     G.step(S);
-    if (after_step) memcpy(after_step, S, (size_t)LB);   // what a browser has after this tick
+    if (LB) memcpy(after_step, S, (size_t)LB);           // what a browser has after this tick
     have_sum = LB && (ticks + 1) % 20 == 0;
     if (have_sum) {
         int r = (int)((ticks + 1) / 20 % RING);
@@ -461,6 +481,7 @@ static void setup(int fresh, uint32_t seed) {
     LB = G.lockstep_bytes;
     CHECK(LB >= 0 && (size_t)LB <= G.state_size, "lockstep_bytes is bigger than the state");
     CHECK(LB == 0 || (G.mirror_step && G.mirror_apply && G.take_events && G.mirror_size >= LB), "lockstep needs mirror_step/apply/take_events");
+    if (LB) { after_step = malloc((size_t)LB); CHECK(after_step, "out of memory"); memcpy(after_step, S, (size_t)LB); }
     nrows = G.rows ? G.rows(S, &rows_ptr, &row_size) : 0;
     CHECK(nrows == 0 || (row_size > 0 && row_size <= PIECE), "bad rows");
     nchunks = LB ? fk_chunks(LB) : 0;
@@ -542,7 +563,7 @@ static void send_debug(WsConn *c) {
 // ------------------------------------------------------------------ viewer
 // The whole recording is loaded into memory. Jumping to tick T re-runs it from the start up to T
 // (thousands of ticks per millisecond), then every open page gets a fresh copy of that moment.
-typedef struct { char type; long t, v; char text[120]; } RecLine;
+typedef struct { char type; long t, v; char text[512]; } RecLine;
 static RecLine *rec_lines;
 static int rec_n, rp_pos;
 static long rec_last, rp_bad = -1;
@@ -558,7 +579,7 @@ static int load_recording(void) {
     int cap = 0;
     while (fgets(line, sizeof line, f)) {
         RecLine r = {0};
-        if (line[0] == 'V' || sscanf(line, "%c %ld %ld %119s", &r.type, &r.t, &r.v, r.text) < 2) continue;
+        if (line[0] == 'V' || !rec_parse(line, &r.type, &r.t, &r.v, r.text, sizeof r.text)) continue;
         if (r.type == 'E') { rec_last = r.t; break; }
         if (rec_n == cap) { cap = cap ? cap * 2 : 1024; rec_lines = realloc(rec_lines, (size_t)cap * sizeof *rec_lines); CHECK(rec_lines, "out of memory"); }
         rec_lines[rec_n++] = r;
@@ -572,6 +593,7 @@ static void rp_reset(void) {
     memcpy(S, start_copy, G.state_size);
     G.on_load(S);
     ticks = 0; rp_pos = 0; rp_bad = -1;
+    if (LB) memcpy(after_step, S, (size_t)LB);
     if (nrows) { memcpy(rows_shadow, rows_ptr, (size_t)nrows * row_size); memset(rows_ver, 0, (size_t)nrows * 4); }
     for (int r = 0; r < RING; r++) ring_tick[r] = -1;
 }
@@ -848,7 +870,7 @@ static int run_replay(void) {
         char type, text[512] = "";
         long t, v = 0;
         if (line[0] == 'V') continue;
-        if (sscanf(line, "%c %ld %ld %511s", &type, &t, &v, text) < 2) continue;
+        if (!rec_parse(line, &type, &t, &v, text, sizeof text)) continue;
         while (ticks < t) {
             sim_tick();
             const char *bad = G.check(S);
@@ -887,7 +909,7 @@ typedef struct {
 #define VN 6
 static VClient vc[VN];
 static uint32_t crng = 1;
-static long c_full_fixed, c_healed, c_corrupts, c_dropped, c_msgs, c_bytes, c_divergent;
+static long c_full_fixed, c_healed, c_corrupts, c_dropped, c_msgs, c_bytes, c_divergent, c_div_lock, c_div_rows;
 static uint32_t chaos_rand(void) { crng ^= crng << 13; crng ^= crng >> 17; crng ^= crng << 5; return crng; }
 
 static int v_push(int i, const void *d, size_t n, int text) {
@@ -944,7 +966,6 @@ static void v_disconnect(int i) {
 
 static int run_chaos(long seeds, long nticks) {
     out_bin = v_bin; out_txt = v_txt; out_pending = v_pending;
-    after_step = malloc((size_t)(G.lockstep_bytes > 0 ? G.lockstep_bytes : 1));
     printf("chaos: %ld seeds x %ld ticks, %d simulated browsers each running client.c (lag, disconnects, junk, slow readers, corruption)\n",
            seeds, nticks, VN);
     double t0 = now_us();
@@ -954,6 +975,7 @@ static int run_chaos(long seeds, long nticks) {
         if (first) { setup(1, (uint32_t)seed); first = 0; }
         else {
             G.init(S, (uint32_t)seed);
+            if (LB) memcpy(after_step, S, (size_t)LB);
             if (nrows) { memcpy(rows_shadow, rows_ptr, (size_t)nrows * row_size); memset(rows_ver, 0, (size_t)nrows * 4); }
             for (int r = 0; r < RING; r++) ring_tick[r] = -1;
         }
@@ -1040,12 +1062,12 @@ static int run_chaos(long seeds, long nticks) {
                 if (LB && v->cl.synced && !v->cl.fresh && v->cl.tick == ticks && !peers[i].need_snapshot) {
                     int same = memcmp(v->cl.state, after_step, (size_t)LB) == 0;
                     if (v->corrupt) { if (same) { v->corrupt = 0; c_healed++; } }
-                    else if (!same) { c_divergent++; v_send(i, "sync"); }
+                    else if (!same) { c_divergent++; c_div_lock++; v_send(i, "sync"); }
                 }
                 if (nrows && !peers[i].need_rows && peers[i].rows_sent == ticks) {
                     Peer *p = &peers[i];
                     if (memcmp(v->cl.rows + (size_t)p->sub_first * row_size, rows_shadow + (size_t)p->sub_first * row_size,
-                               (size_t)p->sub_count * row_size)) c_divergent++;
+                               (size_t)p->sub_count * row_size)) { c_divergent++; c_div_rows++; }
                 }
             }
         }
@@ -1065,7 +1087,7 @@ static int run_chaos(long seeds, long nticks) {
     }
     if (nrows) printf("  rows: full copies %ld, change messages %ld\n", rows_full, rows_changed);
     printf("  every message from the server was readable by the browser code; app rules held every tick\n");
-    printf("  silent divergences (a settled browser not matching the server): %ld\n", c_divergent);
+    printf("  silent divergences (a settled browser not matching the server): %ld (lockstep %ld, rows %ld)\n", c_divergent, c_div_lock, c_div_rows);
     printf(c_divergent ? "FAILED\n" : "PASSED\n");
     return c_divergent ? 2 : 0;
 }

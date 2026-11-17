@@ -25,6 +25,7 @@ export type TunnelEvents = {
   onJson?: (m: { t: string; [k: string]: unknown }) => void;  // every JSON message (engine and app)
   onConnected?: (on: boolean) => void;
   onRows?: () => void;                                        // the rows copy changed
+  onState?: () => void;                                       // the lockstep copy stepped or was replaced
   onMemory?: () => void;                                      // wasm memory grew: re-create views
   onProblem?: (text: string) => void;
 };
@@ -150,7 +151,7 @@ export class Tunnel {
       w.fk_out_clear();
       for (const line of text.split('\n')) if (line) this.send(line);
     }
-    if (r & STATE) this.version++;
+    if (r & STATE) { this.version++; this.opts.events.onState?.(); }
     if (r & ROWS) this.opts.events.onRows?.();
   }
 

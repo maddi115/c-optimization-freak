@@ -1,0 +1,18 @@
+# protocol.def - the todo app's own messages. (Engine messages live in engine/engine.def.)
+# The action numbers must match todo.c (app.c checks this when it compiles).
+
+const MAX 256
+const TEXT_BYTES 64
+const EV_ADD 1
+const EV_TOGGLE 2
+const EV_DELETE 3
+const EV_CLEAR 4
+
+# Browser -> app. ("add" carries text, so app.c reads it by hand: a,<text>)
+cmd toggle t id:int
+cmd remove d id:int
+cmd clear c
+
+# App -> browser (JSON)
+msg hello max:int textBytes:int
+msg list items:int left:int online:int

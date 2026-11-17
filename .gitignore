@@ -1,0 +1,16 @@
+# build output and installed tools (rebuilt by make / npm install)
+build/
+node_modules/
+dist/
+apps/*/ui/public/app.wasm
+apps/*/gen/
+engine/gen/
+# generated from protocol.def / engine.def by make
+apps/*/ui/src/protocol.ts
+apps/*/ui/src/engine/engine_proto.ts
+apps/*/ui/src/engine/tunnel.ts
+# runtime files
+*.snap
+last-run.*
+crash-*
+leak-*
